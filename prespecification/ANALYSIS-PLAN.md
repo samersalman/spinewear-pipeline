@@ -3,9 +3,13 @@
 **Study.** Cumulative ambulatory activity loss after elective cervical and lumbar spine surgery: a
 wearable-linked cohort study in the All of Us Research Program.
 
-**Version.** 1.5. **Status.** LOCKED. **Date of lock.** 2026-08-27. Versions 1.1 through 1.5
-correct the unpublished provisional lock of 1.0 before any count from this study was seen; the
-itemised lists and the superseded hashes are in section 13.
+**Version.** 1.6. **Status.** LOCKED. **Date of lock.** 2026-08-30. Versions 1.1 through 1.5
+correct the unpublished provisional lock of 1.0 before any count from this study was seen.
+**Version 1.6 is different in kind and says so here rather than in a footnote:** it was made
+**after** the Phase 2 runtime probe and **before any cohort count, event count, coefficient, curve
+or P value was seen**. All three of its changes were forced by probe findings the earlier versions
+had themselves named as things that must not be assumed. The itemised lists and the superseded
+hashes are in section 13.
 
 **What "locked" means here.** This file is frozen and hashed by
 `prespecification/lock_plan.py` before Phase 2 runs, which is before any count from this study
@@ -187,12 +191,35 @@ steps-based wear rule would delete exactly the days the study is about.
 
 Two facts about `heart_rate_summary` are runtime probes, not assumptions: the exact per-zone minute
 column name, and that the zones partition the day without double-counting a minute. The probe result
-feeds the query. **Prespecified contingency:** if the probe shows the zones do not partition the day
-(any person-date whose summed zone minutes exceed 1,440, or a summed distribution implausible
-against `heart_rate_minute_level` on a seeded 200-person-day audit sample), the primary wear
-definition falls back to sensitivity definition S2 below, and the substitution is reported in the
-Methods and logged as an amendment. It does not fall back to minute-level counting for the whole
-cohort, which is roughly 300 times the bytes and is not in the budget.
+feeds the query. **Contingency, as amended at version 1.6 after the probe fired.** The probe found that the zones
+do **not** partition the day: 104,300 person-days of 51,329,620, **0.203%**, carry summed zone
+minutes above 1,440, and non-wear can only reduce a total, so a total above the ceiling can only be
+a minute counted twice.
+
+The contingency as written at 1.5 sent the primary definition to S2 for the whole study on any
+single violation. **That is not what this amendment does, and the reason is clinical rather than
+procedural.** S2 requires at least 100 steps, so it is the one rule in this section that deletes
+profoundly inactive days, and the primary definition exists precisely to keep them: profound
+inactivity is plausibly the biological signal this study is about, and deleting those days biases
+recovery debt **downward, hardest in the sickest patients**, which is the direction that would most
+damage the paper's central claim. Applying a whole-study switch of the exposure definition on the
+strength of a 0.203% data-quality artefact trades a small measurement problem for a large
+substantive one.
+
+**What 1.6 specifies instead**, decided at the human's direction with the 0.203% figure in front of
+him and before any cohort count existed:
+
+- The **primary** wear definition remains **at least 600 heart-rate minutes**, with the contaminated
+  person-dates excluded. A person-date whose summed zone minutes exceed 1,440 is **not a valid wear
+  day and not an analyzable day**; it is treated as unobserved and enters the observation model of
+  section 3.7 exactly as any other missing day does. This is a data-quality exclusion of 0.203% of
+  person-days, reported as such, and it is not a change of definition.
+- **S2 is promoted to the first main-text sensitivity row** for the primary endpoint rather than
+  becoming the primary. The contrast between the two is reported, so a reader can size the
+  substitution rather than take it on trust, and the direction of the difference is the direct
+  evidence for the inactive-day argument above.
+- It still does **not** fall back to minute-level counting for the whole cohort, which is roughly
+  300 times the bytes and is not in the budget.
 
 **Sensitivity definitions**, carried from the protocol and run as rows of the ladder in section 6:
 
@@ -516,13 +543,40 @@ so both are fixed here, before any count exists.
   because an ED presentation late on a Friday that leads to a Monday operation is exactly the case
   the criterion is about and a same-day rule would miss it. The ED `visit_concept_id` values are
   enumerated against the CDR's actual distribution before use (4.1), never assumed.
-- **Coding evidence that rescues the episode**, any one of the three being sufficient: the index
-  admission is coded elective or scheduled in `visit_detail` or in the admitting-source concept;
-  **or** a degenerative index diagnosis (spondylosis, spinal stenosis, disc degeneration or
+- **Coding evidence that rescues the episode**, any one of the three being sufficient. **Route 1 was
+  replaced at version 1.6 and the reason is a finding, not a preference.** As written at 1.5 it asked
+  whether the index admission is coded elective or scheduled in `visit_detail` or in the
+  admitting-source concept. The Phase 2 probe read every column the plan names, on the right
+  population, and found the wording nowhere: `visit_source_value` returned **zero** elective matches
+  on acute-care encounters and **zero** on 2,871,640 inpatient visits, and
+  `admitting_source_concept_id` returned **zero** across 73 distinct concepts on `visit_occurrence`
+  and 100 on `visit_detail`. The cause is structural rather than sparse data. Both admitting-source
+  vocabularies are richly populated, and `visit_detail` carries 48,094,220 rows, but **both encode
+  point of origin rather than admission type**: Home, Clinic or physicians office, Emergency Room
+  Hospital, Transfer from a Hospital, Skilled Nursing Facility. A vocabulary that does not carry the
+  elective distinction cannot be made to yield it by a better pattern.
+
+  **Route 1, as amended: the admitting source is a non-emergency point of origin.** The index
+  admission's `admitting_source_concept_id` is one of the ambulatory or community origins, meaning
+  Home, Home Visit, Home / self care, Clinic or physicians office, Clinic or Group Practice, Office,
+  Private physicians' group office, Ambulatory Clinic / Center, Ambulatory Health Service Clinic /
+  Center, Outpatient Hospital, Off Campus-Outpatient Hospital, Outpatient Visit or Ambulatory visit;
+  **and** it is none of the emergency origins, meaning Emergency Room, Emergency Room Visit,
+  Emergency Room - Hospital or Emergency Room-Hospital. **This is a post-hoc route and is labelled
+  as one everywhere it is reported**, including in the Methods: it was constructed after the origin
+  vocabulary's distribution had been seen, at the human's explicit direction and with the
+  post-hoc-ness put to him in those words. It is clinically defensible on its face, because a
+  patient admitted from home or from a clinic for a spine operation was not admitted through the
+  emergency department, which is exactly the distinction criterion 2 is reaching for. It replaces a
+  route that provably cannot fire, so the alternative is not a purer rung 4 but a rung 4 with one
+  fewer working rescue.
+
+  **Or** route 2, a degenerative index diagnosis (spondylosis, spinal stenosis, disc degeneration or
   displacement, spondylolisthesis, or radiculopathy or myelopathy of degenerative origin) is
   recorded on the index encounter **and** nothing from the trauma, malignancy or infection sets of
-  step 3 is recorded on the ED encounter; **or** an outpatient visit carrying a degenerative spine
-  diagnosis is recorded in the 90 days before the index date.
+  step 3 is recorded on the ED encounter; **or** route 3, an outpatient visit carrying a
+  degenerative spine diagnosis is recorded in the 90 days before the index date. Routes 2 and 3 are
+  unchanged at 1.6 and were never tested by the probe that condemned route 1.
 - An episode with a qualifying ED encounter and none of the three rescues is excluded and counted
   here. The count, and the share rescued by each of the three routes, go to the STROBE supplement.
 
@@ -1185,6 +1239,34 @@ scheduled elective procedure on the admission date are excluded. The manuscript 
 encounter", never "unplanned readmission" and never "complication". The `visit_concept_id` values
 for ED and inpatient are **enumerated against the CDR's actual distribution** before use, never
 assumed.
+
+**The enumeration, performed and fixed at version 1.6.** The Phase 2 probe enumerated the CDR's
+actual distribution as this section requires and found fourteen concepts reading as acute care that
+the 1.5 sets did not carry. The probe **reported the candidate list rather than widening the rule**,
+which is what section 11 stop condition 3 demands, and the widening below was chosen by the human
+from that list before any event count existed. The sets are now closed and are these:
+
+| Set | Concept ids | Added at 1.6 |
+|---|---|---|
+| Emergency department | 9203, 262, **8870**, **4163685** | Emergency Room Hospital; Emergency department patient visit |
+| Inpatient admission | 9201, 262, **8717**, **38004279**, **32037**, **581379** | Inpatient Hospital; General Acute Care Hospital; Intensive Care; Inpatient Critical Care Facility |
+
+`262` remains in both because it is an emergency presentation that became an admission, which this
+section collapses to one event.
+
+**What was deliberately left out, and why it is a clinical judgement rather than an oversight.**
+Eight further concepts read as acute care in the loose sense and are excluded: 8971 Inpatient
+Psychiatric Facility, 8920 Comprehensive Inpatient Rehabilitation Facility, 38004311 Inpatient
+Hospice, 38004362 Non-emergency Medical Transport, 581385 Observation Room, 4313303 and the two
+evaluation-and-management billing codes 2514405 and 2514408. **Rehabilitation and hospice
+admissions after spine surgery are frequently planned disposition rather than deterioration**, and
+counting them would move the endpoint away from the unplanned-decline signal the study is about and
+toward length-of-stay and discharge-planning artefacts. Non-emergency transport is a conveyance, not
+an encounter. The billing codes are professional services that ride on an admission already counted
+through its visit, so including them would double-count. Observation is the closest call of the
+eight and is excluded because observation status is an administrative and payer-driven distinction
+whose use varies by site, which would make the endpoint vary by site as well; it is named as a
+supplementary sensitivity rather than dropped in silence.
 
 Risk begins on the first complete calendar day after index discharge. Follow-up ends at the earliest
 of: first acute-care encounter, repeat spine operation, death where reliably available, CDR
@@ -2401,8 +2483,46 @@ condition inside the data condition. Only one of the two can be right, this file
 supported the wrong one, and a column whose meaning differs by surface is a defect in the
 specification rather than a disagreement to be settled at run time.
 
+**Entry 6 is the first post-lock amendment in this log that is NOT a correction to an unpublished
+document, and the difference is stated here rather than buried.** Entries 1 through 5 were each made
+before any BigQuery query had been run against the Controlled Tier, so each left the plan's claim to
+precede the data untouched. **Entry 6 cannot say that.** It was made after the Phase 2 runtime probe
+had executed against the CDR. What it can say, and what the Methods will say in these words, is:
+
+> **No cohort count, episode count, event count, coefficient, curve or P value from this study had
+> been observed at the time of this amendment.** The probe reads CDR vocabulary, table layout and
+> data quality. It does not construct the cohort, and `pipeline/02_pregate.py` refuses to compute a
+> single pre-gate count while any probe verdict is halting, which is why none exists.
+
+**All three changes were forced by findings the plan had itself named in advance as things that must
+not be assumed**, and in each case the module reported the evidence and refused to act on it, which
+is the behaviour section 11 stop condition 3 exists to produce. Two of the three are nonetheless
+**post-hoc in construction and are labelled as such wherever they are reported**: the wear-rule
+handling and the rung 4 route 1 replacement were both chosen after their distributions had been
+seen. They are defended on clinical grounds in their own sections, not on procedural ones.
+
+1. **Section 2.1, the wear definition.** The 1.5 contingency sent the primary definition to S2 on any
+   single zone-partition violation. The violation rate is 0.203% of person-days. S2 is the one rule
+   in the section that deletes profoundly inactive days, which are plausibly the signal, so the
+   substitution would bias recovery debt downward hardest in the sickest patients. 1.6 keeps the
+   600-minute primary, excludes the 0.203% of contaminated person-dates as unobserved, and promotes
+   S2 to the first main-text sensitivity row so the size of the difference is reported rather than
+   assumed. **This is a departure from the contingency as written**, taken at the human's direction
+   with the 0.203% figure in front of him.
+2. **Section 4.1, the acute-care visit ids.** The probe enumerated the CDR's distribution as 4.1
+   requires and returned fourteen unenumerated candidates. Six were added; eight were excluded on the
+   clinical ground that rehabilitation, hospice, observation, transport and professional billing
+   codes are not the unplanned-deterioration signal the endpoint is about. This change is what 4.1
+   always instructed; only the specific ids are new.
+3. **Section 2.6 step 4, rung 4 rescue route 1.** Route 1 as written is not computable in this CDR by
+   any column the plan names: four independent reads returned zero, because both admitting-source
+   vocabularies encode point of origin and not admission type. It is replaced by a non-emergency
+   point-of-origin rule built from that same vocabulary. **This is post-hoc and is labelled so in the
+   Methods.** The alternative was a rung 4 carrying one fewer working rescue, not a purer one.
+
 | Date | Section | Change | Reason | Approved by | Superseded SHA-256 |
 |---|---|---|---|---|---|
+| 2026-08-30 | Header, 2.1, 2.6 step 4, 4.1, 13 | The wear contingency replaced with a contaminated-day exclusion and S2 demoted to sensitivity; the acute-care visit id sets enumerated and closed; rung 4 rescue route 1 rebuilt on point of origin | The Phase 2 probe found the heart-rate zones double-counting on 0.203% of person-days, fourteen unenumerated acute-care concepts, and route 1 returning zero on every column the plan names because the admitting-source vocabularies encode origin and not admission type | Samer, at the Phase 2 hard stop, after the probe and before any cohort or event count existed | `51bef335ef2bbb4dd77cc288d5eb83c39b51fdca746dbe5a2463e17f65a356a1` |
 | 2026-08-25 | Header, 1.3, 2.1, 2.3, 2.4, 2.5, 2.6, 2.7, 3.5, 3.6, 4.3, 4.8, 6, 8, 9.1, 9.3, 9.4, 11, 12, 13 | See the itemised list below | Spec-compliance review of the batch-1 build found the plan asserting ownership of five slug vocabularies while containing no slugs, an attrition ladder that existed in three mutually inconsistent forms in other files and in none here, three mandated rungs present nowhere, a disclosure floor stated two ways inside one document, and one covariate cell an analyst could still choose after seeing data | Samer, at the batch-1 fix pass, before any count was seen | `405f04f9218ca4197e5db766de26fadb1ed52030dae1f9c4d9da9efff1d0826e` |
 | 2026-08-26 | Header, the element-location table, 2.4, 2.6, 6, 12, 13 | See the itemised list below | A review found `pipeline/02_pregate.py` reading fusion status from non-add-on records only while this file fixed no rule either way, so the pre-gate's stratified ceiling table and the ladder's rung-16 procedure groups could have been built under two different classifications, and a ceiling computed under a different rule from the ladder it bounds is not a ceiling on it | Samer, at his direction, before any count was seen | `b42a6b1fc4d159788af6617e9ab378cb6d02dccca18cae18fdb8f782beab820f` |
 | 2026-08-26 | Header, the element-location table, 4.4, 8, 12, 13 | See the itemised list below | The author of `pipeline/06_analysis_gate.py` found 4.4's day-level direct standardization unpublishable under this project's own disclosure rule: it is a weighted average of per-day event counts that are individually below the floor and it carries them inside it, so the figure was either unpublishable or publishable only by giving up the floor. The module named the coarsening it used rather than substituting it silently, and referred the specification back to this file | Samer, at the module-author fix pass, before any count was seen | `a30a7156a851fc7f5f61e36bb35db9d5a7d09905f44ac7e8a1cb34b0da716a29` |

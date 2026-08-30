@@ -314,8 +314,16 @@ HR_ZONE_MINUTE_COLUMN: str = "minute_in_zone"
 # standard Visit domain concepts. 262 is deliberately in BOTH sets: it is an emergency
 # department presentation that became an admission, and plan section 4.1 collapses exactly that
 # pair to one event.
-ED_VISIT_CONCEPT_IDS: tuple[int, ...] = (9203, 262)
-INPATIENT_VISIT_CONCEPT_IDS: tuple[int, ...] = (9201, 262)
+# ANALYSIS-PLAN 4.1 AS AMENDED AT VERSION 1.6, after the Phase 2 probe enumerated the CDR's
+# actual distribution as 4.1 always instructed and returned fourteen unenumerated candidates.
+# Six were added; eight were excluded on clinical grounds and are named in 4.1 so the omission
+# is auditable rather than silent: psychiatric, rehabilitation and hospice admissions, which
+# after spine surgery are frequently planned disposition rather than deterioration; observation,
+# whose use is payer-driven and varies by site; non-emergency transport, a conveyance rather
+# than an encounter; and two evaluation-and-management billing codes that ride on an admission
+# already counted through its visit.
+ED_VISIT_CONCEPT_IDS: tuple[int, ...] = (9203, 262, 8870, 4163685)
+INPATIENT_VISIT_CONCEPT_IDS: tuple[int, ...] = (9201, 262, 8717, 38004279, 32037, 581379)
 
 # A concept whose NAME says emergency or inpatient but which is not in the sets above is a
 # CANDIDATE: the probe reports it so the human can decide, and the cohort build does not use it
@@ -2424,8 +2432,55 @@ def run_probe(namespace: Mapping[str, Any] | None = None, *, halt: bool = True,
         print("every probe passed. The four sentences of each are in the JSON block below.")
 
     result["verdicts"] = [dict(v._asdict()) for v in verdicts]
-    result["halting"] = sorted({v.key for v in verdicts if v.halts})
+
+    # ------------------------------------------------------------------------------------
+    # RESOLVED BY AMENDMENT. A halting verdict stops the pipeline because the plan has no
+    # answer for what it found. Once the plan HAS an answer, continuing to halt is not
+    # caution, it is the pipeline refusing to read its own specification.
+    #
+    # Nothing here suppresses a finding. Every diagnosis above still prints in full, the
+    # verdict keeps its FAIL or INCONCLUSIVE status in `verdicts`, and the exported JSON
+    # carries this map so a reader can see exactly which halt was lifted, by which section,
+    # and what the plan does instead. What changes is only whether the finding still BLOCKS,
+    # and the entry has to say what replaced the blocking behaviour to be allowed to.
+    #
+    # Adding a key here without the corresponding amendment in ANALYSIS-PLAN section 13 is
+    # stop condition 1. The plan version is named in each entry for exactly that reason.
+    # ------------------------------------------------------------------------------------
+    resolved: dict[str, str] = {
+        "PROBE 2b": (
+            "ANALYSIS-PLAN 2.1 as amended at 1.6. The zones do not partition the day and the "
+            "plan no longer answers that by switching the study to S2, which would delete "
+            "profoundly inactive days. `is_valid_wear` excludes any person-date summing above "
+            "1,440 as unobserved, S2 runs as the first main-text sensitivity row, and "
+            "`build_all.sql` still raises if the overflow share exceeds 5%."),
+        "PROBE 4": (
+            "ANALYSIS-PLAN 4.1 as amended at 1.6. The candidate list this probe reported was "
+            "brought to the human at the Phase 2 hard stop, six ids were added to the "
+            "enumerated sets and eight excluded on clinical grounds named in 4.1. The sets are "
+            "now closed, so an unenumerated concept is a finding about a later CDR release "
+            "rather than an open question about this one."),
+        "PROBE 6": (
+            "ANALYSIS-PLAN 2.6 step 4 as amended at 1.6. This probe tests a rescue route that "
+            "no longer exists. Route 1 read `visit_source_value` for elective wording, which "
+            "four independent reads showed is absent from every column the plan named, because "
+            "the admitting-source vocabularies encode point of origin and not admission type. "
+            "Route 1 is now `is_ambulatory_origin` over that same vocabulary, is post hoc, and "
+            "is labelled post hoc in the Methods."),
+    }
+    halting_raw = sorted({v.key for v in verdicts if v.halts})
+    lifted = sorted(k for k in halting_raw if k in resolved)
+    result["halting"] = [k for k in halting_raw if k not in resolved]
+    result["halting before amendment"] = halting_raw
+    result["resolved by amendment"] = {k: resolved[k] for k in lifted}
     result["probe ok"] = not result["halting"]
+
+    if lifted:
+        _heading("Halting verdicts lifted by ANALYSIS-PLAN version 1.6")
+        print("These findings STAND. Their diagnoses printed in full above and their statuses")
+        print("are unchanged. What the plan now supplies is an answer, so they no longer block.")
+        for key in lifted:
+            print(f"\n  {key}\n    {resolved[key]}")
 
     _heading("Summary")
     summary = pd.DataFrame({

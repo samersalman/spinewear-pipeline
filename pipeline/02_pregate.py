@@ -506,6 +506,11 @@ PLANNED_MAX_GB: Mapping[str, float] = MappingProxyType({
 # number while the pre-gate counted valid wear days against another.  The local name is kept
 # because it reads correctly where it is used; only the VALUE is borrowed.
 VALID_WEAR_DAY_MINUTES: int = _borrowed_int(_PROBE, "VALID_WEAR_MINUTES")
+# ANALYSIS-PLAN.md 2.1 as amended at version 1.6.  The ceiling that pairs with the floor above.
+# A person-date whose summed per-zone minutes exceed the number of minutes in a day cannot be
+# real: non-wear only ever REDUCES a total, so a total above the ceiling is a minute counted
+# twice.  Such a day is unobserved, not valid, under every wear definition.
+ZONE_MINUTES_CEILING: int = 1440
 # ANALYSIS-PLAN.md 2.2, the preoperative baseline window and its adequacy rule.
 BASELINE_WINDOW_FIRST_DAY_BEFORE: int = 30
 BASELINE_WINDOW_LAST_DAY_BEFORE: int = 8
@@ -926,16 +931,22 @@ def pregate_counts_sql(
           # minutes, borrowed from the probe rather than restated here, obtained by SUMMING
           # the per-zone minute counts for the person-date.  The zone column name is a runtime
           # probe and arrives through the schema; that the zones partition the day without
-          # double-counting a minute is the OTHER half of the probe, and if it fails the plan's
-          # prespecified contingency substitutes wear definition S2 for the whole study rather
-          # than patching it here.
+          # double-counting a minute is the OTHER half of the probe, and it FAILED against
+          # C2025Q4R6 on 0.203% of person-days.  ANALYSIS-PLAN 2.1 AS AMENDED AT VERSION 1.6
+          # answers that by EXCLUDING the contaminated person-dates rather than by switching
+          # the study to S2, which would have deleted profoundly inactive days.  So the HAVING
+          # carries a ceiling as well as a floor: a summed total above 1,440 cannot be real,
+          # because non-wear only ever reduces a total, and the day is unobserved rather than
+          # valid.  `build_all.sql`'s `is_valid_wear` applies the identical ceiling, and this
+          # is the one place the pre-gate has to restate it, because the pre-gate runs before
+          # the derived tables that own the UDF exist.
           "  SELECT\n"
           "    h.person_id,\n"
           "    h." + s["heart rate date column"] + " AS wear_date\n"
           "  FROM `{CDR}." + s["heart rate table"] + "` h\n"
           "  GROUP BY h.person_id, h." + s["heart rate date column"] + "\n"
-          "  HAVING SUM(h." + s["heart rate zone minutes column"] + ") >= "
-        + str(VALID_WEAR_DAY_MINUTES) + "\n"
+          "  HAVING SUM(h." + s["heart rate zone minutes column"] + ") BETWEEN "
+        + str(VALID_WEAR_DAY_MINUTES) + " AND " + str(ZONE_MINUTES_CEILING) + "\n"
           ")\n"
           ", baseline AS (\n"
           "  SELECT\n"

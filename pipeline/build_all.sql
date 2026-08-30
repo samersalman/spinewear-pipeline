@@ -146,10 +146,46 @@ AS ((
 -- A NULL wear_minutes means no heart_rate_summary row for that person-date, which is
 -- not the same claim as zero minutes, and it is never a valid day under any definition.
 -- -------------------------------------------------------------------------------------
+-- ANALYSIS-PLAN 2.6 step 4, rescue route 1, AS AMENDED AT VERSION 1.6. The ambulatory and
+-- community points of origin, spelled exactly as the CDR's admitting-source vocabulary spells
+-- them, lowercased. The list is written out rather than pattern-matched so that a reviewer can
+-- read the whole classification instead of reconstructing it from a regular expression, and so
+-- that a vocabulary change in a later CDR release fails loudly by matching nothing rather than
+-- quietly by matching something new. Every emergency origin -- 'emergency room', 'emergency room
+-- visit', 'emergency room - hospital', 'emergency room-hospital' -- is absent by construction.
+CREATE OR REPLACE FUNCTION `{DERIVED}.is_ambulatory_origin`(admitting_source_name STRING)
+RETURNS BOOL
+AS ((
+  SELECT LOWER(IFNULL(admitting_source_name, '')) IN (
+    'home',
+    'home visit',
+    'home / self care',
+    'clinic or physicians office',
+    'clinic or group practice',
+    'office',
+    "private physicians' group office",
+    'ambulatory clinic / center',
+    'ambulatory health service clinic / center',
+    'outpatient hospital',
+    'off campus-outpatient hospital',
+    'outpatient visit',
+    'ambulatory visit')
+));
+
 CREATE OR REPLACE FUNCTION `{DERIVED}.is_valid_wear`(wear_minutes INT64, steps INT64, definition STRING)
 RETURNS BOOL
 AS ((
-  SELECT CASE definition
+  -- ANALYSIS-PLAN 2.1 AS AMENDED AT VERSION 1.6. A person-date whose summed per-zone
+  -- minutes exceed 1,440 cannot be real: non-wear only ever REDUCES a total, so a total
+  -- above the ceiling is a minute counted twice. Such a day is not a valid wear day under
+  -- ANY definition and is treated as unobserved, entering the observation model of 3.7
+  -- exactly as a missing day does. This is a data-quality exclusion of about 0.203% of
+  -- person-days in this CDR, NOT a change of wear definition, and it is what 1.6 does
+  -- INSTEAD of sending the whole study to S2. S2 deletes profoundly inactive days, which
+  -- are plausibly the signal, so the 1.5 fallback would have biased recovery debt downward
+  -- hardest in the sickest patients. S2 now runs as the first main-text sensitivity row.
+  SELECT IFNULL(wear_minutes, -1) <= 1440
+     AND CASE definition
            WHEN 'primary' THEN IFNULL(wear_minutes, -1) >= 600
            WHEN 's1'      THEN IFNULL(wear_minutes, -1) >= 576
            WHEN 's2'      THEN IFNULL(wear_minutes, -1) >= 600 AND IFNULL(steps, -1) >= 100
@@ -262,7 +298,7 @@ BEGIN
   END IF;
 
   IF primary_wear_definition NOT IN ('primary', 's2') THEN
-    RAISE USING MESSAGE = 'primary_wear_definition must be primary, or s2 under the prespecified contingency of ANALYSIS-PLAN 2.1, which is invoked only when the zone-partition probe fails and the substitution is logged as an amendment.';
+    RAISE USING MESSAGE = 'primary_wear_definition must be primary, or s2. Under ANALYSIS-PLAN 2.1 AS AMENDED AT 1.6 the primary stays primary even when the zone-partition probe fails: overflowing person-dates are excluded as unobserved by is_valid_wear, and s2 runs as the first main-text sensitivity row rather than as a substitute.';
   END IF;
 
   -- The column names are interpolated into dynamic SQL, so they are shape-checked
@@ -753,8 +789,14 @@ BEGIN
   -- is a human decision, so the build stops here and names it rather than quietly
   -- carrying an inflated wear minute into every valid-day flag in the study.
   SET zone_overflow_days = (SELECT COUNT(*) FROM `{DERIVED}.hr_daily` WHERE wear_minutes > 1440);
-  IF zone_overflow_days > 0 AND primary_wear_definition != 's2' THEN
-    RAISE USING MESSAGE = 'Heart-rate zones do not partition the day: at least one person-date sums to more than 1,440 zone minutes. ANALYSIS-PLAN 2.1 prespecifies the response, which is to adopt sensitivity definition S2 as the primary wear rule and record the substitution as an amendment. Re-run with primary_wear_definition = s2 after the amendment is logged. Refusing to build valid-day flags on a wear minute that double-counts.';
+  -- ANALYSIS-PLAN 2.1 AS AMENDED AT 1.6. Contaminated person-dates are EXCLUDED by
+  -- `is_valid_wear` rather than answered by switching the whole study to S2, so a non-zero
+  -- overflow count is recorded and reported, not raised on. The raise is kept for the case
+  -- the amendment did NOT anticipate: contamination so widespread that the zone table is
+  -- not merely imprecise but unusable, at which point the exclusion would be deleting a
+  -- material share of the cohort's days rather than a rounding artefact.
+  IF zone_overflow_days > (SELECT CAST(0.05 * COUNT(*) AS INT64) FROM `{DERIVED}.hr_daily`) THEN
+    RAISE USING MESSAGE = 'Heart-rate zone overflow exceeds 5% of person-days. ANALYSIS-PLAN 2.1 as amended at 1.6 excludes overflowing person-dates as unobserved, which is defensible at the 0.203% seen in C2025Q4R6 and is not defensible here. Stopping rather than silently deleting a material share of the analyzable days.';
   END IF;
   END IF;
 
@@ -1198,18 +1240,33 @@ BEGIN
     GROUP BY e.episode_id
   ),
 
-  -- Rescue route 1. A PROXY, and labelled as one in the Methods: it reads the visit
-  -- source value for elective or scheduled wording. visit_detail is deliberately not
-  -- consulted, because whether the CDR populates it is an unconfirmed runtime probe and
-  -- a rescue that silently never fires is worse than one that is narrow and named.
+  -- Rescue route 1, REBUILT AT ANALYSIS-PLAN VERSION 1.6, and a POST-HOC proxy that is
+  -- labelled as one in the Methods.
+  --
+  -- What it replaced and why. Route 1 read `visit_source_value` for elective or scheduled
+  -- wording. The Phase 2 probe read every column the plan names, on the right population,
+  -- and found the wording NOWHERE: zero matches on acute-care encounters, zero on 2,871,640
+  -- inpatient visits, zero across 73 admitting-source concepts on visit_occurrence and 100
+  -- on visit_detail. The cause is structural, not sparse data. Both admitting-source
+  -- vocabularies are richly populated and visit_detail carries 48,094,220 rows, but both
+  -- encode POINT OF ORIGIN and not ADMISSION TYPE. No pattern can extract a distinction the
+  -- vocabulary does not carry, which is why the old comment about visit_detail being an
+  -- unconfirmed probe is now known to be true in premise and wrong in conclusion.
+  --
+  -- What it is now: the index admission came from an ambulatory or community origin. A
+  -- patient admitted from home or from a clinic for a spine operation was not admitted
+  -- through the emergency department, which is the distinction protocol criterion 2 reaches
+  -- for. Emergency origins are excluded by construction, being absent from the list.
   elect AS (
     SELECT
       e.episode_id,
-      COALESCE(REGEXP_CONTAINS(LOWER(IFNULL(v.visit_source_value, '')), r'elect|sched'), FALSE)
+      COALESCE(`{DERIVED}.is_ambulatory_origin`(c.concept_name), FALSE)
         AS rescue_elective_coded
     FROM e
     LEFT JOIN `{CDR}.visit_occurrence` AS v
       ON v.visit_occurrence_id = e.index_visit_occurrence_id
+    LEFT JOIN `{CDR}.concept` AS c
+      ON c.concept_id = v.admitting_source_concept_id
   ),
 
   -- Rung 5. A prior qualifying spine operation in the 90 days before the index date.
@@ -1838,10 +1895,14 @@ BEGIN
       DATE_DIFF(v.visit_start_date, f.discharge_date, DAY) AS event_post_discharge_day,
       (v.visit_concept_id IN UNNEST(p.ed_visit_concept_ids))        AS is_ed,
       (v.visit_concept_id IN UNNEST(p.inpatient_visit_concept_ids)) AS is_inpatient,
-      -- The same elective proxy as attrition rung 4, and labelled as one for the same
-      -- reason: an admission carrying scheduled or elective wording on the admission
-      -- date is not an acute-care event.
-      COALESCE(REGEXP_CONTAINS(LOWER(IFNULL(v.visit_source_value, '')), r'elect|sched'), FALSE)
+      -- The same elective proxy as attrition rung 4, rebuilt at ANALYSIS-PLAN 1.6 for the
+      -- same reason and labelled post hoc in the Methods for the same reason: an admission
+      -- arriving from an ambulatory or community origin rather than through the emergency
+      -- department is planned care, not an acute-care event. Note the asymmetry that made
+      -- this the SAFE direction and rung 4 the dangerous one: here a flag that is never true
+      -- excludes nothing, while at rung 4 a rescue that never fires excludes every episode
+      -- with a preceding emergency encounter and reports it as a real exclusion.
+      COALESCE(`{DERIVED}.is_ambulatory_origin`(vc.concept_name), FALSE)
         AS elective_admission
     FROM `{DERIVED}.features` AS f
     CROSS JOIN p
@@ -1850,6 +1911,8 @@ BEGIN
      AND (v.visit_concept_id IN UNNEST(p.ed_visit_concept_ids)
           OR v.visit_concept_id IN UNNEST(p.inpatient_visit_concept_ids))
      AND v.visit_start_date > f.discharge_date
+    LEFT JOIN `{CDR}.concept` AS vc
+      ON vc.concept_id = v.admitting_source_concept_id
      AND DATE_DIFF(v.visit_start_date, f.discharge_date, DAY) <= f.at_risk_last_day
   ),
   -- One event per episode per date. An emergency visit and an admission on the same
