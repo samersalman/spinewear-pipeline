@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# Nothing produced by a run belongs in this repository.
+results/
+probe/
+figures/
+manuscript/
+*.csv
+*.json
+*.parquet
+*.png
+*.pdf
+*.docx

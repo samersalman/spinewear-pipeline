@@ -1,0 +1,5 @@
+file: ANALYSIS-PLAN.md
+sha256: 51bef335ef2bbb4dd77cc288d5eb83c39b51fdca746dbe5a2463e17f65a356a1
+bytes: 209379
+locked: 2026-08-28T00:39:48Z
+tool: lock_plan.py
